@@ -188,7 +188,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     setupFastAnimations()
 end)
-setupFastAnimations()
+task.spawn(setupFastAnimations)
 
 RunService.Heartbeat:Connect(function()
     if not Extras.antiStunEnabled then return end
@@ -210,7 +210,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 local antiFallHookRef
-antiFallHookRef = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+pcall(function() antiFallHookRef = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     if Extras.antiFallEnabled and method == "FireServer" then
         local ok, name = pcall(function() return self.Name:lower() end)
@@ -219,7 +219,7 @@ antiFallHookRef = hookmetamethod(game, "__namecall", newcclosure(function(self, 
         end
     end
     return antiFallHookRef(self, ...)
-end))
+end)) end)
 
 RunService.Heartbeat:Connect(function(dt)
     if not Extras.NoSlowdown then return end
@@ -1213,10 +1213,6 @@ fovCircle.Thickness = 1.5
 fovCircle.Color = Color3.fromRGB(255, 255, 255)
 fovCircle.Visible = false
 
-local TabKiller = CreateTab("Killer")
-local TabParry = CreateTab("Parry")
-local TabVeil = CreateTab("Veil")
-
 local function getHrp() return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") end
 local function getHum() return LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") end
 local function alive(i) return i and i.Parent end
@@ -1330,12 +1326,121 @@ end
 local function doOthersHealFalse(targetPlayer)
 	if not targetPlayer or not targetPlayer.Character then return end
 	local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not targetHRP then return end
+	local healRemote = ReplicatedStorage.Remotes.Healing.HealEvent
+	pcall(function() healRemote:FireServer(targetHRP, false) end)
+end
 local survivorColor = Color3.fromRGB(0, 255, 0)
 local injuredColor = Color3.fromRGB(255, 255, 0) -- Warna kuning buat survivor injured
 local killerColor = Color3.fromRGB(255, 60, 60)
 local genColor = Color3.fromRGB(0, 170, 255)
 local palletColor = Color3.fromRGB(255, 140, 0)
 local windowColor = Color3.fromRGB(200, 200, 200)
+local function makeGenBillboard(part, espTable)
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_GenBillboard"
+    bb.Adornee = part
+    bb.Size = UDim2.new(0, 100, 0, 25)
+    bb.StudsOffset = Vector3.new(0, 2.5, 0)
+    bb.AlwaysOnTop = true
+    bb.MaxDistance = 300
+    
+    -- Teks Persen
+    local tl = Instance.new("TextLabel")
+    tl.Name = "TextLabel"
+    tl.Size = UDim2.new(1, 0, 0, 12)
+    tl.Position = UDim2.new(0, 0, 0, 0)
+    tl.BackgroundTransparency = 1
+    tl.Font = Enum.Font.GothamSemibold
+    tl.TextSize = 11
+    tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tl.TextStrokeTransparency = 0.3
+    tl.Parent = bb
+
+    -- Background Bar (Hitam)
+    local barBg = Instance.new("Frame")
+    barBg.Name = "BarBg"
+    barBg.Size = UDim2.new(1, -4, 0, 5)
+    barBg.Position = UDim2.new(0, 2, 1, -7)
+    barBg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    barBg.BorderSizePixel = 0
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+    barBg.Parent = bb
+
+    -- Fill Bar (Warna Progress)
+    local barFill = Instance.new("Frame")
+    barFill.Name = "BarFill"
+    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    barFill.BorderSizePixel = 0
+    Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+    barFill.Parent = barBg
+
+    bb.Parent = part
+    if espTable then table.insert(espTable, bb) end
+    return tl, barFill, barBg
+end
+local function getLever()
+    local map = workspace:FindFirstChild("Map")
+    if not map then return nil end
+    if map:FindFirstChild("Rooftop") then
+        local rooftopLever = map.Rooftop:FindFirstChild("Gate")
+        if rooftopLever and rooftopLever:FindFirstChild("ExitLever") then
+            return rooftopLever.ExitLever:FindFirstChild("Main")
+        end
+    end
+    local normalGate = map:FindFirstChild("Gate")
+    if normalGate and normalGate:FindFirstChild("ExitLever") then
+        return normalGate.ExitLever:FindFirstChild("Main")
+    end
+    return nil
+end
+
+local function fireLever(state)
+    local lever = getLever()
+    if lever then
+        pcall(function()
+            ReplicatedStorage.Remotes.Exit.LeverEvent:FireServer(lever, state)
+        end)
+    end
+end
+local HitChance = 100           -- Persentase kena (100 = selalu kena, 80 = 80% kena)
+local TargetPartName = "HumanoidRootPart" -- Bisa diubah ke "Head" atau "Torso"
+
+-- [ VISUAL LASER ]
+local LaserLine = Drawing.new("Line")
+LaserLine.Visible = false
+LaserLine.Color = Color3.fromRGB(255, 0, 255) -- Warna Ungu Neon
+LaserLine.Thickness = 2
+LaserLine.Transparency = 1
+
+local function getRealVelocity(hrp, playerName)
+    if not hrp then return Vector3.zero end
+    local currentPos = hrp.Position
+    local currentTime = tick()
+    if not velocityCache[playerName] then
+        velocityCache[playerName] = {lastPos = currentPos, lastTime = currentTime, velocity = Vector3.zero}
+        return Vector3.zero
+    end
+    local cache = velocityCache[playerName]
+    local dt = currentTime - cache.lastTime
+    if dt > 0.01 then
+        local rawVelocity = (currentPos - cache.lastPos) / dt
+        if rawVelocity.Magnitude < 100 then
+            cache.velocity = cache.velocity:Lerp(rawVelocity, 0.4)
+        end
+    end
+    cache.lastPos = currentPos
+    cache.lastTime = currentTime
+    return cache.velocity
+end
+
+local function getGunParts()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil end
+    local tool = char:FindFirstChild("Twist of Fate")
+    if not tool then return nil, nil end
+    local rightArm = tool:FindFirstChild("Right Arm")
     if not rightArm then return nil, nil end
     local gun = rightArm:FindFirstChild("EmperorGun") or rightArm:FindFirstChild("gun")
     if not gun then return nil, nil end
@@ -1458,557 +1563,6 @@ local function doSilentAimFire()
         end
     end
 end
-
--- === UI SETTINGS COMBAT ===
-local silentAimRow = makeRow(TabCombat, 34)
-local silentAimLabel = makeLabel(silentAimRow, "Silent Aim [H]", 10, 140)
-local silentSwitch, silentDot = makeSwitch(silentAimRow)
-
-local silentKeyBtn = Instance.new("TextButton", silentAimRow)
-silentKeyBtn.Size = UDim2.new(0, 28, 0, 20)
-silentKeyBtn.Position = UDim2.new(1, -78, 0.5, -10)
-silentKeyBtn.BackgroundColor3 = COLORS.THEME_DARK
-silentKeyBtn.BackgroundTransparency = 0.2
-silentKeyBtn.Text = "H"
-silentKeyBtn.Font = Enum.Font.GothamBold
-silentKeyBtn.TextColor3 = Color3.fromRGB(200, 180, 220)
-silentKeyBtn.TextSize = 10
-Instance.new("UICorner", silentKeyBtn).CornerRadius = UDim.new(0, 4)
-local skStroke = Instance.new("UIStroke", silentKeyBtn)
-skStroke.Color = COLORS.THEME
-skStroke.Thickness = 1
-skStroke.Transparency = 0.5
-
-silentKeyBtn.MouseButton1Click:Connect(function()
-    if listeningForSilentKey then return end
-    listeningForSilentKey = true
-    silentKeyBtn.Text = "..."
-    silentKeyBtn.TextColor3 = Color3.fromRGB(255, 220, 80)
-    local conn
-    conn = UserInputService.InputBegan:Connect(function(input, gp)
-        if gp then return end
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            SilentAimKey = input.KeyCode
-            local kname = keyCodeName(input.KeyCode)
-            silentKeyBtn.Text = kname
-            silentKeyBtn.TextColor3 = Color3.fromRGB(200, 180, 220)
-            silentAimLabel.Text = "Silent Aim [" .. kname .. "]"
-            listeningForSilentKey = false
-            conn:Disconnect()
-        end
-    end)
-end)
-
--- [ PILIH BAGIAN TUBUH (TARGET PART) ]
-local partRow = makeRow(TabCombat, 34)
-makeLabel(partRow, "Target Part", 10, 100)
-local partBtn = Instance.new("TextButton", partRow)
-partBtn.Size = UDim2.new(0, 80, 0, 22)
-partBtn.Position = UDim2.new(1, -90, 0.5, -11)
-partBtn.BackgroundColor3 = COLORS.THEME_DARK
-partBtn.Text = "Root" -- Default
-partBtn.Font = Enum.Font.GothamSemibold
-partBtn.TextColor3 = Color3.fromRGB(200, 180, 220)
-
--- ============================================================
--- AUTO PARRY BOT (module-level state)
--- Logic extracted from setupParryFeatures(), UI calls removed.
--- ============================================================
-local ParryState = {
-    AUTO_PARRY_DISTANCE  = 14,
-    AUTO_LOOK_THRESHOLD  = 0.45,
-    Enabled              = false,
-    ShowCircle           = true,
-    canParry             = true,
-    isParrying           = false,
-    waitingResult        = false,
-    killerAnimator       = nil,
-    killerChar           = nil,
-    killerPlayer         = nil,
-    parryConnections     = {},
-    firedTracks          = {},
-    gradients            = {},
-}
-
-local ParryRemote, ParryResult
-do
-    local daggerFolder = ReplicatedStorage.Remotes.Items:WaitForChild("Parrying Dagger")
-    ParryRemote = daggerFolder:WaitForChild("parry")
-    ParryResult = daggerFolder:WaitForChild("parryResult")
-end
-
-local COLOR_READY    = Color3.fromRGB(255, 255, 255)
-local COLOR_COOLDOWN = Color3.fromRGB(77, 77, 77)
-
-local function _addGradient(g)
-    if not (g and g:IsA("UIGradient")) then return end
-    for _, v in ipairs(ParryState.gradients) do if v == g then return end end
-    g.Offset = Vector2.new(0, 0.25)
-    table.insert(ParryState.gradients, g)
-end
-
-local function _setIconsColor(color)
-    for _, g in ipairs(ParryState.gradients) do
-        if g and g.Parent and g.Parent.Parent then
-            local container = g.Parent.Parent
-            local icon = container:FindFirstChild("icon")
-            if icon then icon.ImageColor3 = color end
-            if container.Parent then
-                local outerGui = container.Parent:FindFirstChild("Gui")
-                if outerGui then outerGui.ImageColor3 = color end
-            end
-        end
-    end
-end
-
-local function _refreshParryVisual()
-    if not ParryState.canParry or ParryState.isParrying then
-        _setIconsColor(COLOR_COOLDOWN)
-    else
-        _setIconsColor(COLOR_READY)
-    end
-end
-
-local function _playCooldownTween(duration)
-    for _, g in ipairs(ParryState.gradients) do
-        if g and g.Parent then
-            g.Offset = Vector2.new(0, 0.75)
-            local tw = TweenService:Create(g, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Offset = Vector2.new(0, 0.25) })
-            tw:Play()
-            tw.Completed:Connect(function()
-                if g.Offset.Y <= 0.26 then _refreshParryVisual() end
-            end)
-        end
-    end
-end
-
-local function _bindPcGradient()
-    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then return end
-    local survivor = pg:FindFirstChild("Survivor") or pg:FindFirstChild("Survivor-con")
-    if not survivor then return end
-    local gen = survivor:FindFirstChild("Gen")
-    if not gen then return end
-    local itemFrame = gen:FindFirstChild("ItemFrame")
-    if not itemFrame then return end
-    local gui2 = itemFrame:FindFirstChild("Gui")
-    if not gui2 then return end
-    local bar = gui2:FindFirstChild("Bar")
-    if not bar then return end
-    local uig = bar:FindFirstChild("UIGradient")
-    if uig then _addGradient(uig) end
-end
-
-local function _bindMobileGradient()
-    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then return end
-    local mob = pg:FindFirstChild("Survivor-mob")
-    if not mob then return end
-    local controls = mob:FindFirstChild("Controls")
-    if not controls then return end
-    for _, child in ipairs(controls:GetChildren()) do
-        if child:IsA("ImageButton") and child.Name == "Gui-mob" then
-            local bar = child:FindFirstChild("Bar")
-            if bar then
-                local uig = bar:FindFirstChild("UIGradient")
-                if uig then _addGradient(uig) end
-            end
-        end
-    end
-end
-
-local function _tryBindGradients()
-    task.wait(0.5)
-    _bindPcGradient()
-    _bindMobileGradient()
-    _refreshParryVisual()
-end
-
-task.spawn(function()
-    local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
-    if not pg then return end
-    _tryBindGradients()
-    pg.ChildAdded:Connect(function(child)
-        local n = child.Name
-        if n == "Survivor" or n == "Survivor-con" or n == "Survivor-mob" then
-            task.wait(0.3)
-            _bindPcGradient()
-            _bindMobileGradient()
-            _refreshParryVisual()
-        end
-    end)
-end)
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    ParryState.gradients = {}
-    _tryBindGradients()
-end)
-
-ParryResult.OnClientEvent:Connect(function(success, cooldownValue)
-    if not ParryState.waitingResult then return end
-    ParryState.waitingResult = false
-    local cd = tonumber(cooldownValue)
-    if cd and cd > 0 then
-        ParryState.isParrying = false
-        ParryState.canParry   = false
-        _playCooldownTween(cd)
-        _refreshParryVisual()
-        task.delay(cd, function()
-            ParryState.canParry   = true
-            ParryState.isParrying = false
-            _refreshParryVisual()
-        end)
-    else
-        ParryState.canParry   = true
-        ParryState.isParrying = false
-        _refreshParryVisual()
-    end
-end)
-
-local PARRY_ANIMS = {
-    { name = "Katana",  id = "rbxassetid://127096285501517" },
-}
-local ParryAnimation = Instance.new("Animation")
-ParryAnimation.AnimationId = PARRY_ANIMS[1].id
-
-local ATTACK_ANIMS = {
-    ["rbxassetid://113255068724446"] = true,
-    ["rbxassetid://74968262036854"]  = true,
-    ["rbxassetid://110355011987939"] = true,
-    ["rbxassetid://139369275981139"] = true,
-    ["rbxassetid://132817836308238"] = true,
-    ["rbxassetid://129784271201071"] = true,
-    ["rbxassetid://133963973694098"] = true,
-    ["rbxassetid://117042998468241"] = true,
-    ["rbxassetid://105374834496520"] = true,
-    ["rbxassetid://111920872708571"] = true,
-    ["rbxassetid://78432063483146"]  = true,
-    ["rbxassetid://118907603246885"] = true,
-    ["rbxassetid://138720291317243"] = true,
-    ["rbxassetid://115244153053858"] = true,
-    ["rbxassetid://130593238885843"] = true,
-    ["rbxassetid://122812055447896"] = true,
-    ["rbxassetid://78935059863801"]  = true,
-    ["rbxassetid://135002183282873"] = true,
-    ["rbxassetid://121216847022485"] = true,
-}
-
-local Parry_cachedRoot, Parry_cachedHum
-local function _parryRefreshLocalCache()
-    local char = LocalPlayer.Character
-    if char then
-        Parry_cachedRoot = char:FindFirstChild("HumanoidRootPart")
-        Parry_cachedHum  = char:FindFirstChildOfClass("Humanoid")
-    end
-end
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.3)
-    _parryRefreshLocalCache()
-    ParryState.canParry     = true
-    ParryState.isParrying   = false
-    ParryState.waitingResult = false
-    _refreshParryVisual()
-end)
-_parryRefreshLocalCache()
-
-local function _playParryAnimation()
-    if not Parry_cachedHum then return end
-    local anim = Parry_cachedHum:LoadAnimation(ParryAnimation)
-    anim:Play()
-end
-
-local function _isLocalBusy()
-    local char = LocalPlayer.Character
-    if not char then return true end
-    if LocalPlayer:GetAttribute("IsDead") then return true end
-    if char:GetAttribute("IsCarried") then return true end
-    if char:GetAttribute("IsHooked") then return true end
-    if char:GetAttribute("Knocked") then return true end
-    if Parry_cachedRoot and CollectionService:HasTag(Parry_cachedRoot, "doing action") then return true end
-    local check = char:FindFirstChild("CheckInterractable")
-    if check then
-        for _, attr in ipairs({"isVaulting", "isSliding", "isDroppingPallet", "isRepairing", "isHealing", "isUnhooking", "isExiting"}) do
-            if check:GetAttribute(attr) then return true end
-        end
-    end
-    return false
-end
-
-local function _isPathBlocked(fromPos, toPos)
-    local direction = (toPos - fromPos)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local ignoreList = {}
-    if ParryState.killerChar then table.insert(ignoreList, ParryState.killerChar) end
-    if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end
-    params.FilterDescendantsInstances = ignoreList
-    local result = workspace:Raycast(fromPos, direction, params)
-    if result then
-        local hitDist = (result.Position - fromPos).Magnitude
-        local targetDist = direction.Magnitude
-        if hitDist < targetDist - 1 then
-            return true
-        end
-    end
-    return false
-end
-
-local function _doParryBot()
-    if not ParryState.canParry or not ParryState.Enabled or ParryState.isParrying then return false end
-    if _isLocalBusy() then return false end
-    if not Parry_cachedRoot then _parryRefreshLocalCache() end
-    if not Parry_cachedRoot then return false end
-    local enemyRoot = ParryState.killerChar and ParryState.killerChar:FindFirstChild("HumanoidRootPart")
-    if not enemyRoot then return false end
-    local distance = (enemyRoot.Position - Parry_cachedRoot.Position).Magnitude
-    if distance > ParryState.AUTO_PARRY_DISTANCE then return false end
-    local toMe = (Parry_cachedRoot.Position - enemyRoot.Position).Unit
-    if enemyRoot.CFrame.LookVector:Dot(toMe) < ParryState.AUTO_LOOK_THRESHOLD then return false end
-    if _isPathBlocked(enemyRoot.Position, Parry_cachedRoot.Position) then
-        return false
-    end
-    ParryState.canParry      = false
-    ParryState.isParrying    = true
-    ParryState.waitingResult = true
-    _refreshParryVisual()
-    ParryRemote:FireServer()
-    _playParryAnimation()
-    task.delay(15, function()
-        if ParryState.waitingResult then
-            ParryState.waitingResult = false
-            ParryState.canParry       = true
-            ParryState.isParrying     = false
-            _refreshParryVisual()
-        end
-    end)
-    return true
-end
-
-local function _onTrackDetected(track)
-    if not track.Animation then return end
-    if ATTACK_ANIMS[track.Animation.AnimationId] then
-        _doParryBot()
-    end
-end
-
-local function _parryDisconnectAll()
-    for _, c in ipairs(ParryState.parryConnections) do pcall(function() c:Disconnect() end) end
-    ParryState.parryConnections = {}
-end
-
-local function _parryResetKiller()
-    _parryDisconnectAll()
-    ParryState.killerAnimator = nil
-    ParryState.killerChar     = nil
-    ParryState.killerPlayer   = nil
-end
-
-local function _parryGetKiller()
-    local killerTeam = Teams:FindFirstChild("Killer")
-    if not killerTeam then return nil end
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Team == killerTeam then return p end
-    end
-end
-
-function _parryHookKiller()
-    local killer = _parryGetKiller()
-    if not killer then _parryResetKiller() return false end
-    if ParryState.killerPlayer == killer and ParryState.killerAnimator then return true end
-    _parryResetKiller()
-    ParryState.killerPlayer = killer
-    if not killer.Character then killer.CharacterAdded:Wait() end
-    ParryState.killerChar = killer.Character
-    local hum = ParryState.killerChar:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    ParryState.killerAnimator = hum:FindFirstChildOfClass("Animator")
-    if not ParryState.killerAnimator then return false end
-    table.insert(ParryState.parryConnections, ParryState.killerAnimator.AnimationPlayed:Connect(_onTrackDetected))
-    return true
-end
-
-local rangeAdornment = Instance.new("CylinderHandleAdornment")
-rangeAdornment.Name        = "ParryRange"
-rangeAdornment.Radius      = ParryState.AUTO_PARRY_DISTANCE
-rangeAdornment.InnerRadius = ParryState.AUTO_PARRY_DISTANCE - 0.25
-rangeAdornment.Height      = 0.05
-rangeAdornment.Color3      = Color3.fromRGB(195, 155, 255)
-rangeAdornment.AlwaysOnTop = false
-rangeAdornment.Adornee     = workspace:FindFirstChildOfClass("Terrain")
-rangeAdornment.Transparency = 1
-rangeAdornment.Parent      = CoreGui
-
-RunService.PreRender:Connect(function()
-    local char = LocalPlayer.Character
-    if not char or not ParryState.Enabled or not ParryState.ShowCircle then
-        rangeAdornment.Transparency = 1
-    else
-        local root = char:FindFirstChild("HumanoidRootPart")
-        if not root then
-            rangeAdornment.Transparency = 1
-        else
-            rangeAdornment.Transparency = 0.3
-            rangeAdornment.CFrame = CFrame.new(root.Position - Vector3.new(0, 2.6, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
-        end
-    end
-    if not ParryState.Enabled then return end
-    if ParryState.isParrying and Parry_cachedHum then
-        Parry_cachedHum.WalkSpeed = 0
-    end
-    if not ParryState.canParry or ParryState.isParrying then return end
-    if not ParryState.killerAnimator then _parryHookKiller() end
-end)
-
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
-    p:GetPropertyChangedSignal("Team"):Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
-end)
-for _, p in pairs(Players:GetPlayers()) do
-    p.CharacterAdded:Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
-    p:GetPropertyChangedSignal("Team"):Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
-end
-
-
--- ============================================================
--- KILLER TAB (Counter Auto Parry) - module-level state
--- ============================================================
-KillerState = {
-    Enabled           = false,
-    Range             = 15,
-    Cooldown          = 4,
-    lastCounterTick   = 0,
-}
-
-local FAKE_ATTACK_ANIM_ID = "rbxassetid://113255068724446"
-local fakeAttackAnim = Instance.new("Animation")
-fakeAttackAnim.AnimationId = FAKE_ATTACK_ANIM_ID
-
-local function _getClosestSurvivorForCounter()
-    local myChar = LocalPlayer.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return nil end
-    local closestTarget = nil
-    local shortestDist = KillerState.Range
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Team and p.Team.Name == "Survivors" and p.Character then
-            local char = p.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and hrp then
-                local dist = (hrp.Position - myHRP.Position).Magnitude
-                if dist <= shortestDist then
-                    local toSurv = (hrp.Position - myHRP.Position).Unit
-                    if myHRP.CFrame.LookVector:Dot(toSurv) > 0.4 then
-                        shortestDist = dist
-                        closestTarget = char
-                    end
-                end
-            end
-        end
-    end
-    return closestTarget
-end
-
-local function _doFakeAttack()
-    local myChar = LocalPlayer.Character
-    local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
-    if not myHum then return end
-    local animator = myHum:FindFirstChildOfClass("Animator")
-    if animator then
-        local track = animator:LoadAnimation(fakeAttackAnim)
-        track.Priority = Enum.AnimationPriority.Action
-        track:Play()
-        track:AdjustSpeed(0)
-        task.delay(0.2, function()
-            if track then track:Stop(0) end
-        end)
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    if not KillerState.Enabled then return end
-    local now = tick()
-    if now - KillerState.lastCounterTick < KillerState.Cooldown then return end
-    if not _getClosestSurvivorForCounter() then return end
-    KillerState.lastCounterTick = now
-    _doFakeAttack()
-end)
-
-
--- ============================================================
--- Mobile Shoot Button (floating FAB)
--- ============================================================
-local MobileShootBtn = Instance.new("TextButton", CoreGui)
-MobileShootBtn.Name = "MitHubMobileShoot"
-MobileShootBtn.Size = UDim2.new(0, 70, 0, 70)
-MobileShootBtn.Position = UDim2.new(0.85, 0, 0.75, 0)
-MobileShootBtn.BackgroundColor3 = Color3.fromRGB(22, 24, 32)
-MobileShootBtn.BackgroundTransparency = 0.1
-MobileShootBtn.Text = "Shoot"
-MobileShootBtn.Font = Enum.Font.GothamBold
-MobileShootBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MobileShootBtn.TextSize = 13
-MobileShootBtn.Visible = false
-MobileShootBtn.ZIndex = 10
-Instance.new("UICorner", MobileShootBtn).CornerRadius = UDim.new(1, 0)
-local msBtnStroke = Instance.new("UIStroke", MobileShootBtn)
-msBtnStroke.Color = Color3.fromRGB(120, 220, 255)
-msBtnStroke.Thickness = 2
-msBtnStroke.Transparency = 0.2
-
-local msDragging, msDragStart, msStartPos
-MobileShootBtn.InputBegan:Connect(function(input)
-    if MobileShootLocked then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        msDragging = true; msDragStart = input.Position; msStartPos = MobileShootBtn.Position
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if MobileShootLocked then msDragging = false; return end
-    if msDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - msDragStart
-        MobileShootBtn.Position = UDim2.new(msStartPos.X.Scale, msStartPos.X.Offset + delta.X, msStartPos.Y.Scale, msStartPos.Y.Offset + delta.Y)
-    end
-end)
-MobileShootBtn.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then msDragging = false end
-end)
-MobileShootBtn.MouseButton1Click:Connect(function()
-    TweenService:Create(MobileShootBtn, TweenInfo.new(0.08), {BackgroundTransparency = 0}):Play()
-    task.delay(0.12, function()
-        TweenService:Create(MobileShootBtn, TweenInfo.new(0.08), {BackgroundTransparency = 0.1}):Play()
-    end)
-    doSilentAimFire()
-end)
-
-
-    -- === SETTINGAN BISA DIATUR DARI UI ===
-    local AUTO_PARRY_DISTANCE = 14       -- Jarak default (bisa diubah lewat UI nanti)
-    local AUTO_LOOK_THRESHOLD = 0.45     -- Killer harus bener-bener ngadep lurus ke kamu
-    
-    local parryEnabled    = false
-    local parryShowCircle = true         -- Lingkaran ungu (default nyala)
-    local canParry        = true
-    local isParrying      = false
-    local waitingResult   = false
-
-    local killerAnimator, killerChar, killerPlayer
-    local parryConnections = {}
-    local firedTracks      = {}
-    local gradients        = {}
-
-    local COLOR_READY    = Color3.fromRGB(255, 255, 255)
-    local COLOR_COOLDOWN = Color3.fromRGB(77, 77, 77)
-
-    -- Sistem UI Cooldown
-    local function addGradient(g)
-        if not (g and g:IsA("UIGradient")) then return end
-        for _, v in ipairs(gradients) do if v == g then return end end
-        g.Offset = Vector2.new(0, 0.25)
-        table.insert(gradients, g)
-    end
 
 -- ============================================================
 -- UI Structure (using MitHub UI library)
@@ -2755,3 +2309,522 @@ Window.UserSettings:AddLabel("Menu Scale"):AddDropdown({
 })
 
 Notification.new({Title = "MITHUB CRAZY", Content = "All features loaded. Have fun!", Duration = 5})
+
+-- ============================================================
+-- KILLER TAB (Counter Auto Parry) - module-level state
+-- ============================================================
+KillerState = {
+    Enabled           = false,
+    Range             = 15,
+    Cooldown          = 4,
+    lastCounterTick   = 0,
+}
+
+local FAKE_ATTACK_ANIM_ID = "rbxassetid://113255068724446"
+local fakeAttackAnim = Instance.new("Animation")
+fakeAttackAnim.AnimationId = FAKE_ATTACK_ANIM_ID
+
+local function _getClosestSurvivorForCounter()
+    local myChar = LocalPlayer.Character
+    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return nil end
+    local closestTarget = nil
+    local shortestDist = KillerState.Range
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Team and p.Team.Name == "Survivors" and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and hrp then
+                local dist = (hrp.Position - myHRP.Position).Magnitude
+                if dist <= shortestDist then
+                    local toSurv = (hrp.Position - myHRP.Position).Unit
+                    if myHRP.CFrame.LookVector:Dot(toSurv) > 0.4 then
+                        shortestDist = dist
+                        closestTarget = char
+                    end
+                end
+            end
+        end
+    end
+    return closestTarget
+end
+
+local function _doFakeAttack()
+    local myChar = LocalPlayer.Character
+    local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    if not myHum then return end
+    local animator = myHum:FindFirstChildOfClass("Animator")
+    if animator then
+        local track = animator:LoadAnimation(fakeAttackAnim)
+        track.Priority = Enum.AnimationPriority.Action
+        track:Play()
+        track:AdjustSpeed(0)
+        task.delay(0.2, function()
+            if track then track:Stop(0) end
+        end)
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    if not KillerState.Enabled then return end
+    local now = tick()
+    if now - KillerState.lastCounterTick < KillerState.Cooldown then return end
+    if not _getClosestSurvivorForCounter() then return end
+    KillerState.lastCounterTick = now
+    _doFakeAttack()
+end)
+
+
+-- ============================================================
+-- Mobile Shoot Button (floating FAB)
+-- ============================================================
+local MobileShootBtn = Instance.new("TextButton", CoreGui)
+MobileShootBtn.Name = "MitHubMobileShoot"
+MobileShootBtn.Size = UDim2.new(0, 70, 0, 70)
+MobileShootBtn.Position = UDim2.new(0.85, 0, 0.75, 0)
+MobileShootBtn.BackgroundColor3 = Color3.fromRGB(22, 24, 32)
+MobileShootBtn.BackgroundTransparency = 0.1
+MobileShootBtn.Text = "Shoot"
+MobileShootBtn.Font = Enum.Font.GothamBold
+MobileShootBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MobileShootBtn.TextSize = 13
+MobileShootBtn.Visible = false
+MobileShootBtn.ZIndex = 10
+Instance.new("UICorner", MobileShootBtn).CornerRadius = UDim.new(1, 0)
+local msBtnStroke = Instance.new("UIStroke", MobileShootBtn)
+msBtnStroke.Color = Color3.fromRGB(120, 220, 255)
+msBtnStroke.Thickness = 2
+msBtnStroke.Transparency = 0.2
+
+local msDragging, msDragStart, msStartPos
+MobileShootBtn.InputBegan:Connect(function(input)
+    if MobileShootLocked then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        msDragging = true; msDragStart = input.Position; msStartPos = MobileShootBtn.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if MobileShootLocked then msDragging = false; return end
+    if msDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - msDragStart
+        MobileShootBtn.Position = UDim2.new(msStartPos.X.Scale, msStartPos.X.Offset + delta.X, msStartPos.Y.Scale, msStartPos.Y.Offset + delta.Y)
+    end
+end)
+MobileShootBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then msDragging = false end
+end)
+MobileShootBtn.MouseButton1Click:Connect(function()
+    TweenService:Create(MobileShootBtn, TweenInfo.new(0.08), {BackgroundTransparency = 0}):Play()
+    task.delay(0.12, function()
+        TweenService:Create(MobileShootBtn, TweenInfo.new(0.08), {BackgroundTransparency = 0.1}):Play()
+    end)
+    doSilentAimFire()
+end)
+
+-- Looping Combat (Laser Tracker)
+RunService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    
+    if not SilentAimEnabled then
+        currentTarget = nil
+        LaserLine.Visible = false
+        return
+    end
+    
+    currentTarget = getNearestTarget()
+    if currentTarget and currentTarget.Part then
+        local screenPos, onScreen = camera:WorldToViewportPoint(currentTarget.Part.Position)
+        if onScreen then
+            -- Tampilkan Laser dari tengah layar ke musuh
+            LaserLine.Visible = true
+            LaserLine.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+            LaserLine.To = Vector2.new(screenPos.X, screenPos.Y)
+        else
+            LaserLine.Visible = false
+        end
+    else
+        LaserLine.Visible = false
+    end
+end)
+
+
+-- ============================================================
+-- AUTO PARRY BOT (module-level state)
+-- Logic extracted from setupParryFeatures(), UI calls removed.
+-- ============================================================
+local ParryState = {
+    AUTO_PARRY_DISTANCE  = 14,
+    AUTO_LOOK_THRESHOLD  = 0.45,
+    Enabled              = false,
+    ShowCircle           = true,
+    canParry             = true,
+    isParrying           = false,
+    waitingResult        = false,
+    killerAnimator       = nil,
+    killerChar           = nil,
+    killerPlayer         = nil,
+    parryConnections     = {},
+    firedTracks          = {},
+    gradients            = {},
+}
+
+local ParryRemote, ParryResult
+-- Load remotes in background with timeout — NEVER block the main thread.
+-- If the game hasn't loaded these yet (e.g. player not in a match), the
+-- script continues and the UI still shows. ParryRemote stays nil until
+-- found, and all parry functions check for nil before using it.
+task.spawn(function()
+    pcall(function()
+        local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
+        if not remotes then return end
+        local items = remotes:WaitForChild("Items", 15)
+        if not items then return end
+        local daggerFolder = items:WaitForChild("Parrying Dagger", 15)
+        if not daggerFolder then return end
+        ParryRemote = daggerFolder:WaitForChild("parry", 15)
+        ParryResult = daggerFolder:WaitForChild("parryResult", 15)
+        -- Now safe to connect OnClientEvent
+        if ParryResult then
+            ParryResult.OnClientEvent:Connect(function(success, cooldownValue)
+                if not ParryState.waitingResult then return end
+                ParryState.waitingResult = false
+                local cd = tonumber(cooldownValue)
+                if cd and cd > 0 then
+                    ParryState.isParrying = false
+                    ParryState.canParry   = false
+                    _playCooldownTween(cd)
+                    _refreshParryVisual()
+                    task.delay(cd, function()
+                        ParryState.canParry   = true
+                        ParryState.isParrying = false
+                        _refreshParryVisual()
+                    end)
+                else
+                    ParryState.canParry   = true
+                    ParryState.isParrying = false
+                    _refreshParryVisual()
+                end
+            end)
+        end
+    end)
+end)
+
+local COLOR_READY    = Color3.fromRGB(255, 255, 255)
+local COLOR_COOLDOWN = Color3.fromRGB(77, 77, 77)
+
+local function _addGradient(g)
+    if not (g and g:IsA("UIGradient")) then return end
+    for _, v in ipairs(ParryState.gradients) do if v == g then return end end
+    g.Offset = Vector2.new(0, 0.25)
+    table.insert(ParryState.gradients, g)
+end
+
+local function _setIconsColor(color)
+    for _, g in ipairs(ParryState.gradients) do
+        if g and g.Parent and g.Parent.Parent then
+            local container = g.Parent.Parent
+            local icon = container:FindFirstChild("icon")
+            if icon then icon.ImageColor3 = color end
+            if container.Parent then
+                local outerGui = container.Parent:FindFirstChild("Gui")
+                if outerGui then outerGui.ImageColor3 = color end
+            end
+        end
+    end
+end
+
+local function _refreshParryVisual()
+    if not ParryState.canParry or ParryState.isParrying then
+        _setIconsColor(COLOR_COOLDOWN)
+    else
+        _setIconsColor(COLOR_READY)
+    end
+end
+
+local function _playCooldownTween(duration)
+    for _, g in ipairs(ParryState.gradients) do
+        if g and g.Parent then
+            g.Offset = Vector2.new(0, 0.75)
+            local tw = TweenService:Create(g, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Offset = Vector2.new(0, 0.25) })
+            tw:Play()
+            tw.Completed:Connect(function()
+                if g.Offset.Y <= 0.26 then _refreshParryVisual() end
+            end)
+        end
+    end
+end
+
+local function _bindPcGradient()
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local survivor = pg:FindFirstChild("Survivor") or pg:FindFirstChild("Survivor-con")
+    if not survivor then return end
+    local gen = survivor:FindFirstChild("Gen")
+    if not gen then return end
+    local itemFrame = gen:FindFirstChild("ItemFrame")
+    if not itemFrame then return end
+    local gui2 = itemFrame:FindFirstChild("Gui")
+    if not gui2 then return end
+    local bar = gui2:FindFirstChild("Bar")
+    if not bar then return end
+    local uig = bar:FindFirstChild("UIGradient")
+    if uig then _addGradient(uig) end
+end
+
+local function _bindMobileGradient()
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local mob = pg:FindFirstChild("Survivor-mob")
+    if not mob then return end
+    local controls = mob:FindFirstChild("Controls")
+    if not controls then return end
+    for _, child in ipairs(controls:GetChildren()) do
+        if child:IsA("ImageButton") and child.Name == "Gui-mob" then
+            local bar = child:FindFirstChild("Bar")
+            if bar then
+                local uig = bar:FindFirstChild("UIGradient")
+                if uig then _addGradient(uig) end
+            end
+        end
+    end
+end
+
+local function _tryBindGradients()
+    task.wait(0.5)
+    _bindPcGradient()
+    _bindMobileGradient()
+    _refreshParryVisual()
+end
+
+task.spawn(function()
+    local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not pg then return end
+    _tryBindGradients()
+    pg.ChildAdded:Connect(function(child)
+        local n = child.Name
+        if n == "Survivor" or n == "Survivor-con" or n == "Survivor-mob" then
+            task.wait(0.3)
+            _bindPcGradient()
+            _bindMobileGradient()
+            _refreshParryVisual()
+        end
+    end)
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    ParryState.gradients = {}
+    _tryBindGradients()
+end)
+
+-- NOTE: ParryResult.OnClientEvent connection is now inside the task.spawn
+-- above (after remotes are loaded), to avoid errors when ParryResult is nil.
+
+local PARRY_ANIMS = {
+    { name = "Katana",  id = "rbxassetid://127096285501517" },
+}
+local ParryAnimation = Instance.new("Animation")
+ParryAnimation.AnimationId = PARRY_ANIMS[1].id
+
+local ATTACK_ANIMS = {
+    ["rbxassetid://113255068724446"] = true,
+    ["rbxassetid://74968262036854"]  = true,
+    ["rbxassetid://110355011987939"] = true,
+    ["rbxassetid://139369275981139"] = true,
+    ["rbxassetid://132817836308238"] = true,
+    ["rbxassetid://129784271201071"] = true,
+    ["rbxassetid://133963973694098"] = true,
+    ["rbxassetid://117042998468241"] = true,
+    ["rbxassetid://105374834496520"] = true,
+    ["rbxassetid://111920872708571"] = true,
+    ["rbxassetid://78432063483146"]  = true,
+    ["rbxassetid://118907603246885"] = true,
+    ["rbxassetid://138720291317243"] = true,
+    ["rbxassetid://115244153053858"] = true,
+    ["rbxassetid://130593238885843"] = true,
+    ["rbxassetid://122812055447896"] = true,
+    ["rbxassetid://78935059863801"]  = true,
+    ["rbxassetid://135002183282873"] = true,
+    ["rbxassetid://121216847022485"] = true,
+}
+
+local Parry_cachedRoot, Parry_cachedHum
+local function _parryRefreshLocalCache()
+    local char = LocalPlayer.Character
+    if char then
+        Parry_cachedRoot = char:FindFirstChild("HumanoidRootPart")
+        Parry_cachedHum  = char:FindFirstChildOfClass("Humanoid")
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.3)
+    _parryRefreshLocalCache()
+    ParryState.canParry     = true
+    ParryState.isParrying   = false
+    ParryState.waitingResult = false
+    _refreshParryVisual()
+end)
+_parryRefreshLocalCache()
+
+local function _playParryAnimation()
+    if not Parry_cachedHum then return end
+    local anim = Parry_cachedHum:LoadAnimation(ParryAnimation)
+    anim:Play()
+end
+
+local function _isLocalBusy()
+    local char = LocalPlayer.Character
+    if not char then return true end
+    if LocalPlayer:GetAttribute("IsDead") then return true end
+    if char:GetAttribute("IsCarried") then return true end
+    if char:GetAttribute("IsHooked") then return true end
+    if char:GetAttribute("Knocked") then return true end
+    if Parry_cachedRoot and CollectionService:HasTag(Parry_cachedRoot, "doing action") then return true end
+    local check = char:FindFirstChild("CheckInterractable")
+    if check then
+        for _, attr in ipairs({"isVaulting", "isSliding", "isDroppingPallet", "isRepairing", "isHealing", "isUnhooking", "isExiting"}) do
+            if check:GetAttribute(attr) then return true end
+        end
+    end
+    return false
+end
+
+local function _isPathBlocked(fromPos, toPos)
+    local direction = (toPos - fromPos)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignoreList = {}
+    if ParryState.killerChar then table.insert(ignoreList, ParryState.killerChar) end
+    if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end
+    params.FilterDescendantsInstances = ignoreList
+    local result = workspace:Raycast(fromPos, direction, params)
+    if result then
+        local hitDist = (result.Position - fromPos).Magnitude
+        local targetDist = direction.Magnitude
+        if hitDist < targetDist - 1 then
+            return true
+        end
+    end
+    return false
+end
+
+local function _doParryBot()
+    if not ParryState.canParry or not ParryState.Enabled or ParryState.isParrying then return false end
+    if _isLocalBusy() then return false end
+    if not Parry_cachedRoot then _parryRefreshLocalCache() end
+    if not Parry_cachedRoot then return false end
+    local enemyRoot = ParryState.killerChar and ParryState.killerChar:FindFirstChild("HumanoidRootPart")
+    if not enemyRoot then return false end
+    local distance = (enemyRoot.Position - Parry_cachedRoot.Position).Magnitude
+    if distance > ParryState.AUTO_PARRY_DISTANCE then return false end
+    local toMe = (Parry_cachedRoot.Position - enemyRoot.Position).Unit
+    if enemyRoot.CFrame.LookVector:Dot(toMe) < ParryState.AUTO_LOOK_THRESHOLD then return false end
+    if _isPathBlocked(enemyRoot.Position, Parry_cachedRoot.Position) then
+        return false
+    end
+    ParryState.canParry      = false
+    ParryState.isParrying    = true
+    ParryState.waitingResult = true
+    _refreshParryVisual()
+    if ParryRemote then
+        pcall(function() ParryRemote:FireServer() end)
+    end
+    _playParryAnimation()
+    task.delay(15, function()
+        if ParryState.waitingResult then
+            ParryState.waitingResult = false
+            ParryState.canParry       = true
+            ParryState.isParrying     = false
+            _refreshParryVisual()
+        end
+    end)
+    return true
+end
+
+local function _onTrackDetected(track)
+    if not track.Animation then return end
+    if ATTACK_ANIMS[track.Animation.AnimationId] then
+        _doParryBot()
+    end
+end
+
+local function _parryDisconnectAll()
+    for _, c in ipairs(ParryState.parryConnections) do pcall(function() c:Disconnect() end) end
+    ParryState.parryConnections = {}
+end
+
+local function _parryResetKiller()
+    _parryDisconnectAll()
+    ParryState.killerAnimator = nil
+    ParryState.killerChar     = nil
+    ParryState.killerPlayer   = nil
+end
+
+local function _parryGetKiller()
+    local killerTeam = Teams:FindFirstChild("Killer")
+    if not killerTeam then return nil end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Team == killerTeam then return p end
+    end
+end
+
+function _parryHookKiller()
+    local killer = _parryGetKiller()
+    if not killer then _parryResetKiller() return false end
+    if ParryState.killerPlayer == killer and ParryState.killerAnimator then return true end
+    _parryResetKiller()
+    ParryState.killerPlayer = killer
+    if not killer.Character then killer.CharacterAdded:Wait() end
+    ParryState.killerChar = killer.Character
+    local hum = ParryState.killerChar:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    ParryState.killerAnimator = hum:FindFirstChildOfClass("Animator")
+    if not ParryState.killerAnimator then return false end
+    table.insert(ParryState.parryConnections, ParryState.killerAnimator.AnimationPlayed:Connect(_onTrackDetected))
+    return true
+end
+
+local rangeAdornment = Instance.new("CylinderHandleAdornment")
+rangeAdornment.Name        = "ParryRange"
+rangeAdornment.Radius      = ParryState.AUTO_PARRY_DISTANCE
+rangeAdornment.InnerRadius = ParryState.AUTO_PARRY_DISTANCE - 0.25
+rangeAdornment.Height      = 0.05
+rangeAdornment.Color3      = Color3.fromRGB(195, 155, 255)
+rangeAdornment.AlwaysOnTop = false
+rangeAdornment.Adornee     = workspace:FindFirstChildOfClass("Terrain")
+rangeAdornment.Transparency = 1
+rangeAdornment.Parent      = CoreGui
+
+RunService.PreRender:Connect(function()
+    local char = LocalPlayer.Character
+    if not char or not ParryState.Enabled or not ParryState.ShowCircle then
+        rangeAdornment.Transparency = 1
+    else
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then
+            rangeAdornment.Transparency = 1
+        else
+            rangeAdornment.Transparency = 0.3
+            rangeAdornment.CFrame = CFrame.new(root.Position - Vector3.new(0, 2.6, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
+        end
+    end
+    if not ParryState.Enabled then return end
+    if ParryState.isParrying and Parry_cachedHum then
+        Parry_cachedHum.WalkSpeed = 0
+    end
+    if not ParryState.canParry or ParryState.isParrying then return end
+    if not ParryState.killerAnimator then _parryHookKiller() end
+end)
+
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
+    p:GetPropertyChangedSignal("Team"):Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
+end)
+for _, p in pairs(Players:GetPlayers()) do
+    p.CharacterAdded:Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
+    p:GetPropertyChangedSignal("Team"):Connect(function() if ParryState.Enabled then _parryHookKiller() end end)
+end
+
