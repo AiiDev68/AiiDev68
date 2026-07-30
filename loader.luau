@@ -8,7 +8,7 @@
 -- ============================================================
 -- Load MitHub UI library (replace URL with your own GitHub raw later)
 -- ============================================================
-local MitHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/MitHubUI/main/source.luau"))()
+local MitHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/AiiDev68/AiiDev68/main/source.luau"))()
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
